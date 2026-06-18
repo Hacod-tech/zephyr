@@ -199,6 +199,8 @@ static int ospi_send_cmd(const struct device *dev, OSPI_RegularCmdTypeDef *cmd)
 	hal_ret = HAL_OSPI_Command(&dev_data->hospi, cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE);
 	if (hal_ret != HAL_OK) {
 		LOG_ERR("%d: Failed to send OSPI instruction", hal_ret);
+		HAL_OSPI_Abort(&dev_data->hospi);
+		k_sem_reset(&dev_data->sync);
 		return -EIO;
 	}
 	LOG_DBG("CCR 0x%x", dev_data->hospi.Instance->CCR);
@@ -221,6 +223,8 @@ static int ospi_read_access(const struct device *dev, OSPI_RegularCmdTypeDef *cm
 	hal_ret = HAL_OSPI_Command(&dev_data->hospi, cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE);
 	if (hal_ret != HAL_OK) {
 		LOG_ERR("%d: Failed to send OSPI instruction", hal_ret);
+		HAL_OSPI_Abort(&dev_data->hospi);
+		k_sem_reset(&dev_data->sync);
 		return -EIO;
 	}
 
@@ -231,6 +235,8 @@ static int ospi_read_access(const struct device *dev, OSPI_RegularCmdTypeDef *cm
 #endif
 	if (hal_ret != HAL_OK) {
 		LOG_ERR("%d: Failed to read data", hal_ret);
+		HAL_OSPI_Abort(&dev_data->hospi);
+		k_sem_reset(&dev_data->sync);
 		return -EIO;
 	}
 
@@ -262,6 +268,8 @@ static int ospi_write_access(const struct device *dev, OSPI_RegularCmdTypeDef *c
 	hal_ret = HAL_OSPI_Command(&dev_data->hospi, cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE);
 	if (hal_ret != HAL_OK) {
 		LOG_ERR("%d: Failed to send OSPI instruction", hal_ret);
+		HAL_OSPI_Abort(&dev_data->hospi);
+		k_sem_reset(&dev_data->sync);
 		return -EIO;
 	}
 
@@ -273,6 +281,8 @@ static int ospi_write_access(const struct device *dev, OSPI_RegularCmdTypeDef *c
 
 	if (hal_ret != HAL_OK) {
 		LOG_ERR("%d: Failed to write data", hal_ret);
+		HAL_OSPI_Abort(&dev_data->hospi);
+		k_sem_reset(&dev_data->sync);
 		return -EIO;
 	}
 
@@ -521,6 +531,8 @@ static int stm32_ospi_wait_auto_polling(struct flash_stm32_ospi_data *dev_data,
 	dev_data->cmd_status = 0;
 	if (HAL_OSPI_AutoPolling_IT(&dev_data->hospi, s_config) != HAL_OK) {
 		LOG_ERR("OSPI AutoPoll failed");
+		HAL_OSPI_Abort(&dev_data->hospi);
+		k_sem_reset(&dev_data->sync);
 		return -EIO;
 	}
 
@@ -630,6 +642,8 @@ static int stm32_ospi_mem_ready(struct flash_stm32_ospi_data *dev_data, uint8_t 
 
 	if (HAL_OSPI_Command(hospi, &s_command, HAL_OSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK) {
 		LOG_ERR("OSPI AutoPoll command failed");
+		HAL_OSPI_Abort(hospi);
+		k_sem_reset(&dev_data->sync);
 		return -EIO;
 	}
 
@@ -659,6 +673,8 @@ static int stm32_ospi_write_enable(struct flash_stm32_ospi_data *dev_data,
 
 	if (HAL_OSPI_Command(hospi, &s_command, HAL_OSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK) {
 		LOG_ERR("OSPI flash write enable cmd failed");
+		HAL_OSPI_Abort(hospi);
+		k_sem_reset(&dev_data->sync);
 		return -EIO;
 	}
 
@@ -674,7 +690,7 @@ static int stm32_ospi_write_enable(struct flash_stm32_ospi_data *dev_data,
 		s_command.Instruction = SPI_NOR_CMD_RDSR;
 		/* force 1-line DataMode for any non-OSPI transfer */
 		s_command.InstructionMode = HAL_OSPI_INSTRUCTION_1_LINE;
-		s_command.AddressMode = HAL_OSPI_ADDRESS_1_LINE;
+		s_command.AddressMode = HAL_OSPI_ADDRESS_NONE;
 		s_command.DataMode = HAL_OSPI_DATA_1_LINE;
 		s_command.DummyCycles = 0;
 
@@ -685,6 +701,8 @@ static int stm32_ospi_write_enable(struct flash_stm32_ospi_data *dev_data,
 
 	if (HAL_OSPI_Command(hospi, &s_command, HAL_OSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK) {
 		LOG_ERR("OSPI config auto polling cmd failed");
+		HAL_OSPI_Abort(hospi);
+		k_sem_reset(&dev_data->sync);
 		return -EIO;
 	}
 
@@ -2077,9 +2095,10 @@ static int spi_nor_process_bfp(const struct device *dev,
 	addr_mode = jesd216_bfp_addrbytes(bfp);
 	spi_nor_process_bfp_addrbytes(dev, addr_mode);
 	LOG_DBG("Address width: %u Bytes", data->address_width);
-	/* 4 Byte Address Mode has to be explicitly enabled for Winbond Flash */
-	if (addr_mode == JESD216_SFDP_BFP_DW1_ADDRBYTES_VAL_3B4B) {
+	/* 4 Byte Address Mode has to be explicitly enabled */
+	if (addr_mode != JESD216_SFDP_BFP_DW1_ADDRBYTES_VAL_3B) {
 		struct jesd216_bfp_dw16 dw16;
+		bool need_wren = true;
 
 		if (jesd216_bfp_decode_dw16(php, bfp, &dw16) == 0) {
 			/*
@@ -2090,11 +2109,12 @@ static int spi_nor_process_bfp(const struct device *dev,
 			 * If bit 1 is set, a write enable is needed.
 			 */
 			if (dw16.enter_4ba & 0x3) {
-				if (stm32_ospi_program_addr_4b(dev, dw16.enter_4ba & 2)) {
-					LOG_ERR("Unable to enter 4B mode.");
-					return -EIO;
-				}
+				need_wren = !(dw16.enter_4ba & 0x1);
 			}
+		}
+		if (stm32_ospi_program_addr_4b(dev, need_wren)) {
+			LOG_ERR("Unable to enter 4B mode.");
+			return -EIO;
 		}
 	}
 
