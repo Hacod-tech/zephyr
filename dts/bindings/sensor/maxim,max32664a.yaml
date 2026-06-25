@@ -1,0 +1,76 @@
+title: MAX32664A biometric sensor hub (MaximFast + MAX30101)
+
+description: |
+  MAX32664A is pre-programmed with the MaximFast finger heart-rate and SpO2
+  algorithm. It communicates with a MAX30101 analog front-end over an internal
+  I2C bus and exposes processed data to the host over I2C.
+
+  See Maxim UG6806 and UG7087 for protocol details.
+
+compatible: "maxim,max32664a"
+
+include: [sensor-device.yaml, i2c-device.yaml]
+
+properties:
+  reset-gpios:
+    type: phandle-array
+    required: true
+    description: Active-high reset (RSTN).
+
+  mfio-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      MFIO pin. Held high during reset for application mode; configure as input
+      after boot for the hub data-ready interrupt.
+
+  fifo-threshold:
+    type: int
+    default: 15
+    description: Output FIFO interrupt threshold (family 0x10 index 0x01).
+
+  use-agc:
+    type: boolean
+    description: Enable automatic gain control (family 0x52 index 0x00).
+
+  skip-accelerometer:
+    type: boolean
+    description: |
+      Do not enable the hub accelerometer. Use when no KX-122 (or similar) is
+      populated, per UG6806 MAX32664A guidance.
+
+  sample-rate-hz:
+    type: int
+    default: 100
+    enum:
+      - 50
+      - 100
+      - 200
+      - 400
+      - 800
+      - 1000
+      - 1600
+      - 3200
+    description: |
+      MAX30101 effective sample rate in Hz (SPO2_CFG register, bits [4:2]).
+      MaximFast on MAX32664A is typically run at 100 Hz.
+
+  led-pulse-width-us:
+    type: int
+    default: 69
+    enum:
+      - 69
+      - 118
+      - 215
+      - 411
+    description: MAX30101 LED pulse width / ADC integration time.
+
+  adc-range-na:
+    type: int
+    default: 8192
+    enum:
+      - 2048
+      - 4096
+      - 8192
+      - 16384
+    description: MAX30101 ADC full-scale range in nA.

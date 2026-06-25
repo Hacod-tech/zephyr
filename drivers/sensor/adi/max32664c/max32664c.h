@@ -173,6 +173,8 @@ struct max32664c_config {
 
 	bool use_max86141;
 	bool use_max86161;
+	bool use_max30101;
+	bool skip_accelerometer;
 };
 
 /** @brief Device runtime data structure.

@@ -51,6 +51,17 @@ properties:
     description:
       Use the MAX86161 as the AFE for the MAX32664C.
 
+  use-max30101:
+    type: boolean
+    description:
+      Use the MAX30101 as the AFE for the MAX32664C.
+
+  skip-accelerometer:
+    type: boolean
+    description:
+      Skip the onboard accelerometer probe and do not enable it at runtime.
+      Use this when the hub is wired to a MAX30101 without an accelerometer.
+
   motion-time:
     type: int
     default: 200

@@ -1,0 +1,27 @@
+# Copyright (c) 2026
+# SPDX-License-Identifier: Apache-2.0
+
+config SENSOR_MAX32664A
+	bool "MAX32664A biometric sensor hub (MaximFast + MAX30101)"
+	default y
+	depends on DT_HAS_MAXIM_MAX32664A_ENABLED
+	select I2C
+	help
+	  Driver for the MAX32664A sensor hub running the MaximFast finger HR/SpO2
+	  algorithm with an external MAX30101 analog front-end. See Maxim UG6806.
+
+if SENSOR_MAX32664A
+
+config MAX32664A_QUEUE_SIZE
+	int "Sample queue depth"
+	default 8
+
+config MAX32664A_SAMPLE_BUFFER_SIZE
+	int "Maximum FIFO samples read per transaction"
+	default 16
+
+config MAX32664A_THREAD_STACK_SIZE
+	int "Background FIFO reader stack size"
+	default 2048
+
+endif

@@ -45,6 +45,7 @@ int max32664c_i2c_transmit(const struct device *dev, uint8_t *tx_buf, uint8_t tx
 
 	/* Check the status byte for a valid transaction */
 	if (rx_buf[0] != 0) {
+		LOG_ERR("Status byte not 0: 0x%X,  0x%X", rx_buf[0], rx_buf[1]);
 		return -EINVAL;
 	}
 
@@ -58,7 +59,6 @@ int max32664c_i2c_transmit(const struct device *dev, uint8_t *tx_buf, uint8_t tx
  */
 static int max32664c_check_sensors(const struct device *dev)
 {
-	uint8_t afe_id;
 	uint8_t tx[3];
 	uint8_t rx[2];
 	struct max32664c_data *data = dev->data;
@@ -66,32 +66,59 @@ static int max32664c_check_sensors(const struct device *dev)
 
 	LOG_DBG("Checking sensors...");
 
-	/* Read MAX86141 WHOAMI */
-	tx[0] = 0x41;
-	tx[1] = 0x00;
-	tx[2] = 0xFF;
-	if (max32664c_i2c_transmit(dev, tx, 3, rx, 2, MAX32664C_DEFAULT_CMD_DELAY)) {
-		return -EINVAL;
-	}
+	uint8_t afe_idx;
+	uint8_t afe_id_expected;
 
-	if (config->use_max86141) {
+	if (config->use_max30101) {
+		LOG_DBG("\tUsing MAX30101 as AFE");
+		afe_idx = 0x03;
+		afe_id_expected = 0x15;
+	} else if (config->use_max86141) {
 		LOG_DBG("\tUsing MAX86141 as AFE");
-		afe_id = 0x25;
+		afe_idx = 0x00;
+		afe_id_expected = 0x25;
 	} else if (config->use_max86161) {
 		LOG_DBG("\tUsing MAX86161 as AFE");
-		afe_id = 0x36;
+		afe_idx = 0x00;
+		afe_id_expected = 0x36;
 	} else {
 		LOG_ERR("\tNo AFE defined!");
 		return -ENODEV;
 	}
 
+
+	/* Enable AFE */
+	tx[0] = 0x44;
+	tx[1] = afe_idx;
+	tx[2] = 0x01;
+	if (max32664c_i2c_transmit(dev, tx, 3, rx, 1, MAX32664C_DEFAULT_CMD_DELAY)) {
+		LOG_ERR("Failed to enable AFE!");
+		// return -EINVAL;
+	}
+
+    k_msleep(45);
+
+	/* Read AFE WHOAMI / PART_ID */
+	tx[0] = 0x41;
+	tx[1] = afe_idx;
+	tx[2] = 0xFF;
+	if (max32664c_i2c_transmit(dev, tx, 3, rx, 2, MAX32664C_DEFAULT_CMD_DELAY)) {
+		LOG_ERR("\tI2C transmission error!");
+		return -EINVAL;
+	}
+
 	data->afe_id = rx[1];
-	if (data->afe_id != afe_id) {
+	if (data->afe_id != afe_id_expected) {
 		LOG_ERR("\tAFE WHOAMI failed: 0x%X", data->afe_id);
 		return -ENODEV;
 	}
 
 	LOG_DBG("\tAFE WHOAMI OK: 0x%X", data->afe_id);
+
+	if (config->skip_accelerometer) {
+		LOG_DBG("\tSkipping accelerometer check");
+		return 0;
+	}
 
 	/* Read Accelerometer WHOAMI */
 	tx[0] = 0x41;
@@ -190,6 +217,7 @@ static int max32664c_set_mode_raw(const struct device *dev)
 {
 	uint8_t rx;
 	uint8_t tx[4];
+	const struct max32664c_config *config = dev->config;
 	struct max32664c_data *data = dev->data;
 
 	/* Stop the current algorithm mode */
@@ -218,7 +246,7 @@ static int max32664c_set_mode_raw(const struct device *dev)
 	}
 
 	/* Enable the accelerometer */
-	if (max32664c_acc_enable(dev, true)) {
+	if (!config->skip_accelerometer && max32664c_acc_enable(dev, true)) {
 		return -EINVAL;
 	}
 
@@ -509,6 +537,7 @@ static int max32664c_set_mode_wake_on_motion(const struct device *dev)
 {
 	uint8_t rx;
 	uint8_t tx[6];
+	const struct max32664c_config *config = dev->config;
 	struct max32664c_data *data = dev->data;
 
 	LOG_DBG("MAX32664C entering wake on motion mode...");
@@ -542,7 +571,7 @@ static int max32664c_set_mode_wake_on_motion(const struct device *dev)
 	}
 
 	/* Enable the accelerometer */
-	if (max32664c_acc_enable(dev, true)) {
+	if (!config->skip_accelerometer && max32664c_acc_enable(dev, true)) {
 		return -EINVAL;
 	}
 
@@ -555,6 +584,7 @@ static int max32664c_exit_mode_wake_on_motion(const struct device *dev)
 {
 	uint8_t rx;
 	uint8_t tx[6];
+	const struct max32664c_config *config = dev->config;
 	struct max32664c_data *data = dev->data;
 
 	LOG_DBG("MAX32664C exiting wake on motion mode...");
@@ -571,7 +601,7 @@ static int max32664c_exit_mode_wake_on_motion(const struct device *dev)
 	}
 
 	/* Disable the accelerometer */
-	if (max32664c_acc_enable(dev, false)) {
+	if (!config->skip_accelerometer && max32664c_acc_enable(dev, false)) {
 		return -EINVAL;
 	}
 
@@ -584,6 +614,7 @@ static int max32664c_disable_sensors(const struct device *dev)
 {
 	uint8_t rx;
 	uint8_t tx[4];
+	const struct max32664c_config *config = dev->config;
 	struct max32664c_data *data = dev->data;
 
 	if (max32664c_stop_algo(dev)) {
@@ -609,7 +640,7 @@ static int max32664c_disable_sensors(const struct device *dev)
 	}
 
 	/* Disable the accelerometer */
-	if (max32664c_acc_enable(dev, false)) {
+	if (!config->skip_accelerometer && max32664c_acc_enable(dev, false)) {
 		return -EINVAL;
 	}
 
@@ -1081,6 +1112,8 @@ static int max32664c_pm_action(const struct device *dev, enum pm_device_action a
 		.spo2_config = DT_INST_PROP(inst, spo2_config),                                    \
 		.use_max86141 = DT_INST_PROP(inst, use_max86141),                                  \
 		.use_max86161 = DT_INST_PROP(inst, use_max86161),                                  \
+		.use_max30101 = DT_INST_PROP(inst, use_max30101),                                  \
+		.skip_accelerometer = DT_INST_PROP(inst, skip_accelerometer),                      \
 		.motion_time = DT_INST_PROP(inst, motion_time),                                    \
 		.motion_threshold = DT_INST_PROP(inst, motion_threshold),                          \
 		.min_integration_time_idx = DT_INST_ENUM_IDX(inst, min_integration_time),          \
