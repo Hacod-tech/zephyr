@@ -1,0 +1,22 @@
+# Copyright (c) 2026 Hacod
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Ilitek ILI2511 capacitive touchscreen controller (Ilitek I2C protocol v3.x).
+
+compatible: "ilitek,ili2511"
+
+include: [i2c-device.yaml, touchscreen-common.yaml]
+
+properties:
+  irq-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      Interrupt pin (active low, edge falling when touch data is ready).
+
+  rst-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      Reset pin (active low).
