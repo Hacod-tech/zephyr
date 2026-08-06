@@ -1,0 +1,11 @@
+# Copyright (c) 2026 Hacod
+# SPDX-License-Identifier: Apache-2.0
+
+config INPUT_ILI2511
+	bool "Ilitek ILI2511 capacitive touch controller"
+	default y
+	depends on DT_HAS_ILITEK_ILI2511_ENABLED
+	select I2C
+	select INPUT_TOUCH
+	help
+	  Enable driver for Ilitek ILI2511 touchscreen controllers.
