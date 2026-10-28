@@ -1172,6 +1172,15 @@ static void spi_stm32_complete(const struct device *dev, int status)
 #endif /* compat st_stm32_spi_fifo*/
 
 	if (LL_SPI_GetMode(spi) == LL_SPI_MODE_MASTER) {
+		if (status != 0) {
+			/*
+			 * Failed or timed-out transfer: EOT/TXC may never come
+			 * (e.g. ES0392 master stall), so abort it by disabling SPE,
+			 * which also resets the peripheral state machine.
+			 */
+			ll_disable_spi(spi);
+		}
+
 		while (ll_spi_is_busy(spi) && LL_SPI_IsEnabled(spi)) {
 #if DT_HAS_COMPAT_STATUS_OKAY(st_stm32h7_spi)
 			uint32_t width = SPI_WORD_SIZE_GET(data->ctx.config->operation);
@@ -1251,6 +1260,18 @@ static void spi_stm32_isr(const struct device *dev)
 	/* Some spurious interrupts are triggered when SPI is not enabled; ignore them.
 	 */
 	if (!LL_SPI_IsEnabled(spi)) {
+#if DT_HAS_COMPAT_STATUS_OKAY(st_stm32h7_spi)
+		/*
+		 * On H7, status flags stay set with SPE cleared, so an enabled
+		 * source re-fires forever (IRQ storm). Mask them; a transfer
+		 * still waiting for completion then ends with -ETIMEDOUT.
+		 */
+		ll_disable_int_tx_empty(spi);
+		ll_disable_int_rx_not_empty(spi);
+		ll_disable_int_errors(spi);
+		LL_SPI_DisableIT_EOT(spi);
+		LL_SPI_DisableIT_DXP(spi);
+#endif /* st_stm32h7_spi */
 		return;
 	}
 
@@ -1439,6 +1460,19 @@ static int spi_stm32_configure(const struct device *dev,
 		LL_SPI_SetMode(spi, LL_SPI_MODE_MASTER);
 	}
 
+#if DT_HAS_COMPAT_STATUS_OKAY(st_stm32h7_spi)
+	/*
+	 * Master keeps driving SCK/MOSI while SPE=0 (AFCNTR). Otherwise the pins
+	 * float whenever SPE is toggled (e.g. on TSIZE change) and a device held
+	 * selected with SPI_HOLD_ON_CS can see a spurious SCK edge (bit slip).
+	 */
+	if ((config->operation & SPI_OP_MODE_SLAVE) != 0U) {
+		LL_SPI_DisableGPIOControl(spi);
+	} else {
+		LL_SPI_EnableGPIOControl(spi);
+	}
+#endif /* DT_HAS_COMPAT_STATUS_OKAY(st_stm32h7_spi) */
+
 #if ANY_SPI_DATA_WIDTH_IS(STM32_SPI_DATA_WIDTH_FULL_4_TO_32_BIT) || \
 	ANY_SPI_DATA_WIDTH_IS(STM32_SPI_DATA_WIDTH_FULL_4_TO_16_BIT)
 	LL_SPI_SetDataWidth(spi, table_datawidth[SPI_WORD_SIZE_GET(config->operation) -
@@ -1564,6 +1598,14 @@ static int32_t spi_stm32_set_transfer_size(const struct device *dev,
 
 	if (frames <= cfg->fifo_max_transfer_size) {
 		data->tx_len = data->rx_len = frames;
+		/*
+		 * TSIZE may only be changed with SPE cleared. SPE is still set
+		 * here after a previous SPI_HOLD_ON_CS transfer (CS is held by
+		 * GPIO, not by SPE), and writing TSIZE then stalls the master.
+		 */
+		if (LL_SPI_IsEnabled(spi)) {
+			ll_disable_spi(spi);
+		}
 		LL_SPI_SetTransferSize(spi, (uint32_t)frames);
 	} else {
 		LOG_ERR("Buffer size exceeds maximal supported value");
