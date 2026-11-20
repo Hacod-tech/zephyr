@@ -721,6 +721,11 @@ static int modem_cellular_on_idle_state_enter(struct modem_cellular_data *data)
 	modem_cmux_release(&data->cmux);
 	modem_pipe_close_async(data->uart_pipe);
 	k_sem_give(&data->suspended_sem);
+
+	if (data->resume_pending) {
+		data->resume_pending = false;
+		modem_cellular_delegate_event(data, MODEM_CELLULAR_EVENT_RESUME);
+	}
 	return 0;
 }
 
@@ -1573,6 +1578,11 @@ static void modem_cellular_await_ppp_dead_event_handler(struct modem_cellular_da
 			modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_RUN_DIAL_SCRIPT);
 		}
 		break;
+	case MODEM_CELLULAR_EVENT_SUSPEND:
+		/* PPP_DEAD may never come; do not wait for it to power off */
+		modem_cellular_stop_timer(data);
+		modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_INIT_POWER_OFF);
+		break;
 	default:
 		break;
 	}
@@ -1900,6 +1910,19 @@ static void modem_cellular_enter_state(struct modem_cellular_data *data,
 	}
 }
 
+static bool modem_cellular_is_powering_off(enum modem_cellular_state state)
+{
+	switch (state) {
+	case MODEM_CELLULAR_STATE_INIT_POWER_OFF:
+	case MODEM_CELLULAR_STATE_RUN_SHUTDOWN_SCRIPT:
+	case MODEM_CELLULAR_STATE_POWER_OFF_PULSE:
+	case MODEM_CELLULAR_STATE_AWAIT_POWER_OFF:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static void modem_cellular_event_handler(struct modem_cellular_data *data,
 					 enum modem_cellular_event evt)
 {
@@ -1908,6 +1931,15 @@ static void modem_cellular_event_handler(struct modem_cellular_data *data,
 	state = data->state;
 
 	modem_cellular_log_event(evt);
+
+	if (modem_cellular_is_powering_off(state)) {
+		/* Power-off states ignore RESUME; keep the latest request for IDLE */
+		if (evt == MODEM_CELLULAR_EVENT_RESUME) {
+			data->resume_pending = true;
+		} else if (evt == MODEM_CELLULAR_EVENT_SUSPEND) {
+			data->resume_pending = false;
+		}
+	}
 
 	switch (data->state) {
 	case MODEM_CELLULAR_STATE_IDLE:
@@ -2314,6 +2346,18 @@ int modem_cellular_pm_action(const struct device *dev, enum pm_device_action act
 	case PM_DEVICE_ACTION_SUSPEND:
 		modem_cellular_delegate_event(data, MODEM_CELLULAR_EVENT_SUSPEND);
 		ret = k_sem_take(&data->suspended_sem, K_SECONDS(30));
+		if (ret < 0) {
+			/*
+			 * A failed runtime suspend leaks a PM usage count: the device
+			 * then stays ACTIVE and every later RESUME is skipped, while
+			 * the FSM ends up in IDLE. The FSM is already powering off,
+			 * so report suspended; a RESUME sent meanwhile is replayed
+			 * once IDLE is reached.
+			 */
+			LOG_WRN("Suspend not finished in 30 s (state: %s)",
+				modem_cellular_state_str(data->state));
+			ret = 0;
+		}
 		break;
 
 	default:

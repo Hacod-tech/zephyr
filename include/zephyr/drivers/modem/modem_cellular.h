@@ -170,6 +170,8 @@ struct modem_cellular_data {
 
 	/* Power management */
 	struct k_sem suspended_sem;
+	/** RESUME received while powering off; replayed on entering IDLE. */
+	bool resume_pending;
 
 	/* Event dispatcher */
 	struct k_work event_dispatch_work;
